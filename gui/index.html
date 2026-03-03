@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Focus OS</title>
+    <style>
+        /* --- Design Philosophy: iOS / Glassmorphism --- */
+        :root {
+            --bg-glass: rgba(255, 255, 255, 0.65);
+            --bg-glass-dark: rgba(0, 0, 0, 0.75);
+            --color-focus: #34C759;     /* Green */
+            --color-distract: #FF9500;  /* Orange/Yellow */
+            --color-danger: #FF3B30;    /* Red */
+            --color-neutral: #8E8E93;
+            --color-blue: #007AFF;
+            --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        body {
+            margin: 0; padding: 0;
+            background: transparent; /* 透明背景，依靠 Python 窗口透明 */
+            font-family: var(--font-main);
+            overflow: hidden;
+            user-select: none;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* --- Assistant Widget --- */
+        #widget-container {
+            width: 280px;
+            background: var(--bg-glass);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            box-shadow: var(--shadow-soft);
+            padding: 20px;
+            display: flex; flex-direction: column; gap: 16px;
+            transition: all 0.6s cubic-bezier(0.25, 0.8, 0.25, 1);
+            position: relative;
+        }
+
+        /* 状态视觉反馈 (Feedback Mechanism) */
+        #widget-container.mode-distracted {
+            border-color: var(--color-distract);
+            box-shadow: 0 0 30px rgba(255, 149, 0, 0.4);
+            transform: scale(1.02);
+        }
+        #widget-container.mode-focus {
+            /* 专注时低调 */
+            opacity: 0.9;
+            transform: scale(0.98);
+        }
+
+        .header-label {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--color-neutral); font-weight: 700; margin-bottom: 4px;
+        }
+
+        .goal-input {
+            width: 90%; border: none; background: rgba(0,0,0,0.05);
+            padding: 8px 10px; border-radius: 8px; font-size: 13px; font-weight: 600;
+            outline: none; transition: 0.3s; color: #333;
+        }
+        .goal-input:focus { background: rgba(255,255,255,0.8); }
+
+        /* --- Score Ring (Conic Gradient) --- */
+        .score-section { display: flex; align-items: center; justify-content: space-between; margin-top: 5px; }
+        .score-circle { 
+            width: 64px; height: 64px; border-radius: 50%; 
+            display: flex; align-items: center; justify-content: center; position: relative;
+            background: conic-gradient(var(--color-focus) 0%, #eee 0); 
+            transition: background 1s linear;
+        }
+        .score-circle::before { 
+            content: ''; position: absolute; width: 52px; height: 52px; 
+            background: rgba(255,255,255,0.9); border-radius: 50%; 
+        }
+        .score-text { z-index: 1; font-size: 20px; font-weight: 800; color: #333; }
+
+        .ai-comment-box {
+            flex: 1; margin-left: 12px; font-size: 13px; color: #444; line-height: 1.4;
+            display: flex; align-items: center; min-height: 40px;
+        }
+
+        /* --- Controls --- */
+        .btn-group { display: flex; gap: 8px; margin-top: 8px; }
+        .btn { 
+            flex: 1; padding: 10px; border-radius: 14px; border: none; 
+            font-size: 12px; font-weight: 600; cursor: pointer; transition: 0.2s; 
+        }
+        .btn-primary { background: var(--color-blue); color: white; }
+        .btn-primary.running { background: var(--color-danger); }
+        .btn-secondary { background: rgba(0,0,0,0.05); color: #333; }
+        .btn-secondary:hover { background: rgba(0,0,0,0.1); }
+
+        /* --- Relax Drawer --- */
+        .drawer {
+            max-height: 0; overflow: hidden; opacity: 0;
+            transition: all 0.4s ease;
+            background: rgba(255,255,255,0.5); border-radius: 12px; margin-top: 5px;
+        }
+        .drawer.open { max-height: 120px; opacity: 1; padding: 10px; margin-top: 10px;}
+        
+        .toggle-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .toggle-label { font-size: 12px; font-weight: 500; }
+        
+        /* iOS Toggle */
+        .switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 20px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--color-focus); }
+        input:checked + .slider:before { transform: translateX(16px); }
+
+    </style>
+</head>
+<body>
+
+    <div id="widget-container">
+        <div>
+            <div class="header-label">CURRENT GOAL</div>
+            <input type="text" id="goal-input" class="goal-input" value="编写 Python 代码" placeholder="输入目标...">
+        </div>
+
+        <div class="header-label" style="margin-top: 10px;">ATTENTION SCORE</div>
+        <div class="score-section">
+            <div class="score-circle" id="score-ring">
+                <span class="score-text" id="score-val">--</span>
+            </div>
+            <div class="ai-comment-box" id="ai-comment">
+                等待启动...
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn btn-primary" id="btn-toggle" onclick="toggleMonitor()">▶ 开始监控</button>
+            <button class="btn btn-secondary" onclick="toggleDrawer()">☕ 放松</button>
+            <button class="btn btn-secondary" onclick="exportReport()">📊 统计</button>
+        </div>
+
+        <div class="drawer" id="relax-drawer">
+            <div class="toggle-row">
+                <span class="toggle-label">🌧️ 白噪音 (雨声)</span>
+                <label class="switch">
+                    <input type="checkbox" onchange="toggleNoise(this)">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="toggle-row">
+                <span class="toggle-label">⏰ 专注倒计时 (60s)</span>
+                <label class="switch">
+                    <input type="checkbox" id="timer-switch" onchange="toggleTimer(this)">
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <audio id="audio-rain" loop src="https://actions.google.com/sounds/v1/weather/rain_heavy_loud.ogg"></audio>
+
+    <script>
+        // --- JS Logic ---
+        let isRunning = false;
+        let pollInterval = null;
+
+        // 监听 Python 后端准备就绪
+        window.addEventListener('pywebviewready', function() {
+            console.log('FocusOS Core Ready');
+        });
+
+        // 1. 监控开关
+        function toggleMonitor() {
+            const btn = document.getElementById('btn-toggle');
+            const goal = document.getElementById('goal-input').value;
+
+            if (!isRunning) {
+                // 调用 Python: start_monitor
+                window.pywebview.api.start_monitor(goal).then(res => {
+                    isRunning = true;
+                    btn.innerText = "■ 停止监控";
+                    btn.classList.add('running');
+                    document.getElementById('goal-input').disabled = true;
+                    startPolling();
+                });
+            } else {
+                // 调用 Python: stop_monitor
+                window.pywebview.api.stop_monitor().then(res => {
+                    isRunning = false;
+                    btn.innerText = "▶ 开始监控";
+                    btn.classList.remove('running');
+                    document.getElementById('goal-input').disabled = false;
+                    stopPolling();
+                });
+            }
+        }
+
+        // 2. 状态轮询 (每秒更新 UI)
+        function startPolling() {
+            pollInterval = setInterval(() => {
+                window.pywebview.api.get_status().then(data => {
+                    updateUI(data);
+                });
+            }, 1000);
+        }
+        function stopPolling() { clearInterval(pollInterval); }
+
+        // 3. UI 更新逻辑
+        function updateUI(data) {
+            const score = data.score;
+            document.getElementById('score-val').innerText = score;
+            document.getElementById('ai-comment').innerText = data.comment;
+
+            // 动态圆环颜色
+            let color = '#34C759'; // Green
+            if (score < 100) color = '#FF9500'; // Yellow
+            if (score < 50) color = '#FF3B30';  // Red
+
+            // 更新圆环进度 (满分200)
+            const percent = Math.min(100, Math.max(0, score / 2));
+            document.getElementById('score-ring').style.background = `conic-gradient(${color} ${percent}%, #eee 0)`;
+
+            // 更新窗口视觉状态 (呼吸效果)
+            const widget = document.getElementById('widget-container');
+            if (score < 80) { // 这里简化了判断逻辑，分数低就认为分心
+                widget.classList.add('mode-distracted');
+                widget.classList.remove('mode-focus');
+            } else {
+                widget.classList.add('mode-focus');
+                widget.classList.remove('mode-distracted');
+            }
+        }
+
+        // 4. 抽屉控制
+        function toggleDrawer() {
+            document.getElementById('relax-drawer').classList.toggle('open');
+        }
+
+        // 5. 白噪音控制
+        function toggleNoise(el) {
+            const audio = document.getElementById('audio-rain');
+            if(el.checked) audio.play(); else audio.pause();
+        }
+
+        // 6. 倒计时 & 蜂鸣声 (Web Audio API)
+        function toggleTimer(el) {
+            if(el.checked) {
+                setTimeout(() => {
+                    playBeep();
+                    el.checked = false; // 自动归位
+                }, 60000); // 60秒
+            }
+        }
+        
+        function playBeep() {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            osc.connect(ctx.destination);
+            osc.frequency.value = 800;
+            osc.start();
+            osc.stop(ctx.currentTime + 0.5);
+            alert("⏰ 休息时间结束！");
+        }
+
+        // 7. 导出报表
+        function exportReport() {
+            window.pywebview.api.generate_report().then(res => {
+                alert(res.msg); // Python 返回的消息
+            });
+        }
+    </script>
+</body>
+</html>
